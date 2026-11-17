@@ -1,0 +1,26 @@
+[project]
+name = "imb-feature-screener"
+version = "0.1.0"
+description = "Imbalanced binary classification feature screening for SBA loan analysis"
+readme = "README.md"
+authors = [
+    { name = "Rajiv Sambasivan", email = "rajiv.sambasivan@r2-ds.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "lightgbm>=4.7.0",
+    "matplotlib>=3.11.2",
+    "numpy>=1.26",
+    "optbinning>=1.0.0",
+    "pandas>=2.0",
+    "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
+    "shap>=0.54.1",
+]
+
+[project.scripts]
+imb-feature-screener = "imb_feature_screener:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
