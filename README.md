@@ -21,6 +21,14 @@ After installation, the package is available as:
 uv run python -c "from imb_feature_screener import ImbalancedFeatureScreener; print(ImbalancedFeatureScreener)"
 ```
 
+## Best fit: KMDS projects
+
+This repo and the `ImbalancedFeatureScreener` are designed to work best in a KMDS project workflow, where datasets are downloaded and prepared with [kmds-dataset-util](https://github.com/rajivsam/kmds-dataset-util) and then cleaned and annotated with [dd-parser-cleaner](https://github.com/rajivsam/dd-parser-cleaner).
+
+In that setting, the screener is used as the downstream feature discovery and validation step after the data pipeline has already assembled a model-ready dataset with a clear binary target and the important domain context already captured in the dataset preparation process.
+
+For guidance on how to interpret the screener's feature metrics and value bands, see [feature_importance_interpretation.md](./feature_importance_interpretation.md).
+
 ## Usage
 
 ```python
