@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import shap
+from category_encoders import CatBoostEncoder, MEstimateEncoder, TargetEncoder
 from lightgbm import LGBMClassifier
 from optbinning import OptimalBinning
 from scipy.stats import ks_2samp
@@ -47,6 +48,9 @@ class ImbalancedFeatureScreener(BaseEstimator, TransformerMixin):
         perm_lift_thresh: float = 0.002,
         leakage_iv_thresh: float = 1.50,
         include_leakage: bool = False,
+        categorical_encoding: str = "m_estimate",
+        categorical_encoder_params: dict | None = None,
+        categorical_columns: list[str] | None = None,
     ):
         self.top_k = top_k
         self.random_state = random_state
@@ -63,6 +67,9 @@ class ImbalancedFeatureScreener(BaseEstimator, TransformerMixin):
         self.perm_lift_thresh = perm_lift_thresh
         self.leakage_iv_thresh = leakage_iv_thresh
         self.include_leakage = include_leakage
+        self.categorical_encoding = categorical_encoding
+        self.categorical_encoder_params = categorical_encoder_params or {}
+        self.categorical_columns = categorical_columns
 
         self.report_ = None
         self.selected_features_ = []
@@ -71,6 +78,8 @@ class ImbalancedFeatureScreener(BaseEstimator, TransformerMixin):
         self.feature_names_in_ = []
         self.n_pos_ = 0
         self.base_rate_ = 0.0
+        self.categorical_encoders_ = {}
+        self.categorical_columns_ = []
 
     def fit(self, X: pd.DataFrame, y: Iterable[int | float]):
         X = self._as_dataframe(X)
@@ -83,7 +92,9 @@ class ImbalancedFeatureScreener(BaseEstimator, TransformerMixin):
         self.feature_names_in_ = list(X.columns)
         self.n_pos_ = int(y.eq(1).sum())
         self.base_rate_ = float(y.mean())
-        processed = self._preprocess_features(X)
+        self.categorical_columns_ = self._resolve_categorical_columns(X)
+        self.categorical_encoders_ = {}
+        processed = self._preprocess_features(X, y)
         self.dropped_collinear_ = []
         self.binning_tables_ = {}
 
@@ -129,6 +140,8 @@ class ImbalancedFeatureScreener(BaseEstimator, TransformerMixin):
         self._assign_tiers(y.to_numpy())
         self._prune_collinear(processed)
         self._apply_epv_budget(y.to_numpy())
+        if self.categorical_encoding != "none":
+            self._fit_categorical_encoders(X, y)
         return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
@@ -138,7 +151,17 @@ class ImbalancedFeatureScreener(BaseEstimator, TransformerMixin):
         missing = [col for col in self.selected_features_ if col not in X.columns]
         if missing:
             raise ValueError(f"Columns missing in transform input: {missing}")
-        return X[self.selected_features_].copy()
+
+        transformed = X[self.selected_features_].copy()
+        if self.categorical_encoding != "none":
+            for col in self.selected_features_:
+                if col in self.categorical_encoders_:
+                    encoded = self.categorical_encoders_[col].transform(X[[col]])
+                    if isinstance(encoded, pd.DataFrame):
+                        transformed[col] = encoded.iloc[:, 0].astype(float)
+                    else:
+                        transformed[col] = pd.Series(encoded, index=X.index).astype(float)
+        return transformed
 
     def summary(self) -> None:
         if self.report_ is None:
@@ -282,7 +305,87 @@ class ImbalancedFeatureScreener(BaseEstimator, TransformerMixin):
             X = pd.DataFrame(X)
         return X.copy()
 
-    def _preprocess_features(self, X: pd.DataFrame) -> pd.DataFrame:
+    def _resolve_categorical_columns(self, X: pd.DataFrame) -> list[str]:
+        if self.categorical_columns is not None:
+            return [col for col in self.categorical_columns if col in X.columns]
+        if self.categorical_encoding == "none":
+            return []
+        return [col for col in X.columns if not pd.api.types.is_numeric_dtype(X[col])]
+
+    def _build_categorical_encoder(self, column: str):
+        params = dict(self.categorical_encoder_params)
+        if self.categorical_encoding == "m_estimate":
+            return MEstimateEncoder(
+                cols=[column],
+                m=params.get("m", 10.0),
+                sigma=params.get("sigma", 0.05),
+                handle_unknown=params.get("handle_unknown", "value"),
+                handle_missing=params.get("handle_missing", "value"),
+                random_state=self.random_state,
+                return_df=True,
+            )
+        if self.categorical_encoding == "target":
+            return TargetEncoder(
+                cols=[column],
+                min_samples_leaf=params.get("min_samples_leaf", 20),
+                smoothing=params.get("smoothing", 10.0),
+                handle_unknown=params.get("handle_unknown", "value"),
+                handle_missing=params.get("handle_missing", "value"),
+                return_df=True,
+            )
+        if self.categorical_encoding == "catboost":
+            return CatBoostEncoder(
+                cols=[column],
+                a=params.get("a", 1),
+                sigma=params.get("sigma"),
+                random_state=self.random_state,
+                handle_unknown=params.get("handle_unknown", "value"),
+                handle_missing=params.get("handle_missing", "value"),
+                return_df=True,
+            )
+        raise ValueError(f"Unsupported categorical encoding '{self.categorical_encoding}'")
+
+    def _fit_categorical_encoders(self, X: pd.DataFrame, y: pd.Series) -> None:
+        self.categorical_encoders_ = {}
+        for col in self.categorical_columns_:
+            encoder = self._build_categorical_encoder(col)
+            X_col = X[[col]].copy()
+            X_col[col] = X_col[col].astype("string").fillna("MISSING")
+            encoder.fit(X_col, y)
+            self.categorical_encoders_[col] = encoder
+
+    def _encode_oof_categorical(self, series: pd.Series, y: pd.Series, column: str) -> pd.Series:
+        series = series.astype("string").fillna("MISSING")
+        if series.empty:
+            return series.astype(float)
+
+        class_counts = pd.Series(y).value_counts()
+        pos_count = int(class_counts.get(1, 0))
+        neg_count = int(class_counts.get(0, 0))
+        min_class_count = min(pos_count, neg_count)
+        n_splits = min(self.n_splits, max(2, min_class_count))
+        if n_splits > len(series):
+            n_splits = len(series)
+        if n_splits < 2:
+            raise ValueError("At least two samples per class are required to cross-fit categorical encodings.")
+
+        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=self.random_state)
+        encoded = np.full(len(series), np.nan, dtype=float)
+        for train_idx, val_idx in cv.split(series.to_numpy(), y.to_numpy()):
+            train_df = pd.DataFrame({column: series.iloc[train_idx].to_numpy()}, index=np.arange(len(train_idx)))
+            val_df = pd.DataFrame({column: series.iloc[val_idx].to_numpy()}, index=np.arange(len(val_idx)))
+            y_train = y.iloc[train_idx].reset_index(drop=True)
+            encoder = self._build_categorical_encoder(column)
+            encoder.fit(train_df, y_train)
+            transformed = encoder.transform(val_df)
+            encoded[val_idx] = transformed.iloc[:, 0].to_numpy(dtype=float)
+
+        if np.isnan(encoded).any():
+            global_mean = float(np.mean(y.to_numpy()))
+            encoded[np.isnan(encoded)] = global_mean
+        return pd.Series(encoded, index=series.index, name=column).astype(float)
+
+    def _preprocess_features(self, X: pd.DataFrame, y: pd.Series | None = None) -> pd.DataFrame:
         processed = X.copy()
         for col in processed.columns:
             s = processed[col]
@@ -293,8 +396,13 @@ class ImbalancedFeatureScreener(BaseEstimator, TransformerMixin):
                     med = 0.0
                 processed[col] = s.fillna(med)
             else:
-                s = s.astype("string").fillna("MISSING")
-                processed[col] = s.astype("category").cat.codes.astype(float)
+                if self.categorical_encoding == "none":
+                    encoded = s.astype("string").fillna("MISSING")
+                    processed[col] = encoded.astype("category").cat.codes.astype(float)
+                elif y is not None:
+                    processed[col] = self._encode_oof_categorical(s, y, col)
+                else:
+                    processed[col] = s.astype("string").fillna("MISSING")
         return processed
 
     def _infer_dtype(self, s: pd.Series) -> str:

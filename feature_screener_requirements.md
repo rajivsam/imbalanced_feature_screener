@@ -15,7 +15,20 @@ At 1–2% prevalence, effective sample size is constrained by the **minority cla
 - **`.transform(X)`**: Filters input DataFrames down to `self.selected_features_` for seamless pipeline integration.
 - **`.summary()`**: Prints an executive breakdown of sample prevalence, EPV feature budget, tier counts, and features demoted due to collinearity.
 
-### 2.2 Multi-Lens Scoring Engine
+### 2.2 Categorical Encoding Strategy (Leakage-Safe)
+
+Categorical features are treated as supervised encodings, not arbitrary integer labels. The screener supports several scikit-learn-compatible categorical encoders via `category_encoders`, with the default set to `m_estimate` for rare-event screening because it provides conservative shrinkage under severe class imbalance.
+
+Supported modes:
+
+- **`m_estimate`** (default): `MEstimateEncoder` with shrinkage toward the global target rate. Best default for highly imbalanced classification and sparse category counts.
+- **`target`**: `TargetEncoder` with smoothing / minimum-leaf regularization. Useful for standard Bayesian target encoding when simpler smoothing is preferred.
+- **`catboost`**: `CatBoostEncoder` with a similar regularized target-based encoding pattern. Useful as an advanced option for noisy or high-cardinality features.
+- **`none`**: Explicitly disable category encoding and fall back to the legacy category-code approach.
+
+All supervised encoders must be fit with strict out-of-fold logic. In each cross-validation split, the encoder is fit only on the training partition and then applied to the validation partition. This prevents target leakage from category means into the screening metrics. The final screener `transform()` runs with encoders fit on the training data only after the screening and selection decisions are complete.
+
+### 2.3 Multi-Lens Scoring Engine
 
 Every feature is evaluated across four complementary metrics:
 
@@ -24,7 +37,7 @@ Every feature is evaluated across four complementary metrics:
 3. **Out-of-Fold PR-AUC Permutation Importance (`perm_pr_auc`)**: Uses stratified cross-validation with a shallow, regularized `LightGBM` model scored strictly on `average_precision` (PR-AUC). Captures conditional interactions while flagging noisy/overfit splits (`perm_pr_auc < 0`).
 4. **Positive-Class SHAP Attribution (`pos_shap`)**: Evaluates validation-fold `TreeExplainer` SHAP values strictly on minority rows (`y == 1`) so majority-class baseline variance does not obscure rare-event drivers.
 
-### 2.3 Automated Tiering & EPV Feature Budgeting
+### 2.4 Automated Tiering & EPV Feature Budgeting
 
 Features are classified into five mutually exclusive tiers to establish a transparent pruning rubric:
 
@@ -39,7 +52,7 @@ Features are classified into five mutually exclusive tiers to establish a transp
 \(k_{\max }=\min \left(\text{max\_features},\;\max \left(5,\;\left\lfloor \frac{N_{\text{pos}}}{\text{min\_epv}}\right\rfloor \right)\right)\)
 - Prioritizes `Anchor` and `Interaction` features first, filling any remaining budget slots with positive-lift `Weak / Redundant` features.
 
-### 2.4 Configurable Collinearity Pruning (New in v2.0)
+### 2.5 Configurable Collinearity Pruning (New in v2.0)
 
 To avoid wasting scarce EPV budget slots on redundant twins (e.g., `amount_usd` vs. `amount_eur` or rolling 7d vs. 14d sums), the wrapper includes a greedy rank-ordered deduplication pass:
 
@@ -96,12 +109,15 @@ To avoid wasting scarce EPV budget slots on redundant twins (e.g., `amount_usd` 
 | `prune_collinear` | `True` | `bool` | Enable or disable rank-ordered collinearity demotion |
 | `collinear_thresh` | `0.85` | `float` | Absolute correlation cutoff for demoting redundant features |
 | `collinear_method` | `'spearman'` | `str` | Correlation method (`'spearman'` or `'pearson'`) |
+| `categorical_encoding` | `'m_estimate'` | `Literal['m_estimate','target','catboost','none']` | Default supervised encoding strategy for non-numeric columns |
+| `categorical_encoder_params` | `{}` | `dict | None` | Extra arguments passed through to the selected category encoder |
+| `categorical_columns` | `None` | `list[str] | None` | Optional explicit subset of columns to treat as categorical |
 | `iv_anchor_thresh` | `0.10` | `float` | Minimum IV required to qualify as an `Anchor` |
 | `ks_anchor_thresh` | `0.15` | `float` | Minimum KS statistic required to qualify as an `Anchor` |
 | `perm_lift_thresh` | `0.002` | `float` | Minimum PR-AUC permutation lift to qualify as `Interaction` |
 | `leakage_iv_thresh` | `1.50` | `float` | IV threshold above which features are flagged for leakage |
 | `include_leakage` | `False` | `bool` | Whether `Leakage Check` features are allowed into `selected_features_` |
-| `n_splits` | `3` | `int` | Stratified K-Fold splits for out-of-fold LightGBM & SHAP evaluation |
+| `n_splits` | `3` | `int` | Stratified K-Fold splits for out-of-fold LightGBM, SHAP, and categorical encoding evaluation |
 | `random_state` | `42` | `int` | Random seed for reproducibility |
 
 ---
@@ -112,8 +128,8 @@ To avoid wasting scarce EPV budget slots on redundant twins (e.g., `amount_usd` 
 | --- | --- | --- |
 | `numpy` | `>=1.23` | Array operations and ECDF calculations |
 | `pandas` | `>=1.5` | DataFrame handling and diagnostic report generation |
-| `scikit-learn` | `>=1.2` | `BaseEstimator`, `TransformerMixin`, `StratifiedKFold`, `average_precision_score` |
-| `lightgbm` | `>=4.0` | Shallow, regularized GBDT for out-of-fold interaction screening |
+| `scikit-learn` | `>=1.2` | `BaseEstimator`, `TransformerMixin`, and CV utilities |
+| `category_encoders` | `>=2.7` | Supervised encoding for categorical variables with leakage-safe out-of-fold fitting |formerMixin`, `StratifiedKFold`, `average_precision_score` || `lightgbm` | `>=4.0` | Shallow, regularized GBDT for out-of-fold interaction screening |
 | `optbinning` | `>=0.19` | Constrained optimal binning, WoE, and Information Value (IV) |
 | `shap` | `>=0.43` | `TreeExplainer` for minority-filtered (`Y=1`) feature attributions |
 | `scipy` | `>=1.10` | `ks_2samp` distributional distance testing |
