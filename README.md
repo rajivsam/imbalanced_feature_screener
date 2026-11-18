@@ -5,6 +5,8 @@
 
 The core value proposition of the package is this: you have a rare-event dataset and you want a principled breakdown of the discriminative features with respect to the rare event. This is a common problem in enterprise data, including fraud detection, credit screening, and similar risk and anomaly settings. The screener is designed to be an exploratory and descriptive tool that ranks features by how strongly they distinguish the rare event from the majority class, while also surfacing the most informative, non-leaky signals in a way that remains interpretable and operationally useful.
 
+In modern datasets with many features, especially in sparse-event settings, most of those features are often noisy and add little predictive value. For a dataset with fifty or more candidate variables, it is common to accumulate feature noise that wastes computational resources and dilutes model training without materially improving the end result. This screener provides a candidate pool: it identifies the features that appear genuinely informative for the rare event, establishes a baseline signal profile, and gives teams a disciplined way to add or test new features without blindly expanding the modeling pipeline. The result is a more interpretable, lower-noise feature set for downstream modeling and validation.
+
 A scikit-learn-compatible feature screening package for highly imbalanced binary classification problems, tuned for rare-event detection problems such as SBA loan distress.
 
 ## Installation
