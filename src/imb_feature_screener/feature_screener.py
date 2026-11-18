@@ -82,7 +82,7 @@ class ImbalancedFeatureScreener(BaseEstimator, TransformerMixin):
         self.categorical_columns_ = []
 
     def fit(self, X: pd.DataFrame, y: Iterable[int | float]):
-        X = self._as_dataframe(X)
+        X = self._as_dataframe(X).reset_index(drop=True)
         y = pd.Series(y).reset_index(drop=True)
         if len(X) != len(y):
             raise ValueError(f"X and y have mismatched lengths: {len(X)} vs {len(y)}")

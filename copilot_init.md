@@ -42,6 +42,23 @@ cd /home/rajiv/programming/imbalanced_feature_screener
 
 This confirms the package still fits, selects features under the EPV budget, and produces notebook-visible plots.
 
+### Data leakage guard used in the active notebook
+The notebook workflow explicitly drops leakage fields before modeling:
+
+```python
+leakage_columns = [
+    'loanstatus',
+    'paidinfulldate',
+    'chargeoffdate',
+    'grosschargeoffamount',
+]
+df = df.drop(columns=[c for c in leakage_columns if c in df.columns], errors='ignore')
+df = df[df['loan_status_r'] != -1].copy()
+df['target'] = df['loan_status_r'].astype(int)
+```
+
+This is required because these columns encode realized status or loss outcome information and would leak the target signal into the screening pipeline.
+
 ## Fast bootstrap
 From the repo root:
 
@@ -92,7 +109,14 @@ Notebook execution check:
 import pandas as pd
 from imb_feature_screener import ImbalancedFeatureScreener
 
-X = df.drop(columns=["target"])
+# data-leakage guard: remove post-outcome fields before fitting
+leakage_columns = [
+    "loanstatus",
+    "paidinfulldate",
+    "chargeoffdate",
+    "grosschargeoffamount",
+]
+X = df.drop(columns=["target", *leakage_columns], errors="ignore")
 y = df["target"].astype(int)
 
 screener = ImbalancedFeatureScreener(
@@ -110,7 +134,10 @@ screener.summary()
 
 ## Data + notebook context
 - Notebook examples live in `notebooks/`
-- Loan data is in `data/sba_loans_imb_learn.csv` and related SBA CSV files
+- The main analysis dataset is `data/sba_full_attrib_clean.csv`
+- The screener workflow uses a cleaned binary target built from `loan_status_r` after filtering out `loan_status_r == -1`
+- Before modeling, we explicitly drop leakage columns: `loanstatus`, `paidinfulldate`, `chargeoffdate`, and `grosschargeoffamount`
+- These are outcome/post-outcome fields and would leak distress information into the feature set if left in the analysis
 - The evaluation script reads the default dataset path from the repo root and expects a `target` column
 - The reference notebook is `notebooks/feature_screener_sba.ipynb`
 
